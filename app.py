@@ -1,20 +1,28 @@
-from flask import Flask, request, jsonify, send_file, render_template_string, redirect, url_for, session, abort
+from datetime import datetime
+import json
+import os
+import re
+import secrets
+import urllib.parse
+from flask import (
+    Flask,
+    abort,
+    jsonify,
+    redirect,
+    render_template_string,
+    request,
+    send_file,
+    url_for,
+)
 from flask_cors import CORS
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
-import yt_dlp
 import requests
-import os
-import re
-import json
-import secrets
-import urllib.parse
-from datetime import datetime
+import yt_dlp
 
 app = Flask(__name__)
 app.secret_key = os.urandom(32)
 
-# Termux her çalıştığında tamamen rastgele ve tahmin edilemez bir admin key üretir
 ADMIN_SECRET_KEY = secrets.token_hex(16)
 
 CORS(app)
@@ -22,65 +30,86 @@ CORS(app)
 limiter = Limiter(
     get_remote_address,
     app=app,
-    default_limits=["200 per day", "50 per hour"],
-    storage_uri="memory://"
+    default_limits=["500 per day", "100 per hour"],
+    storage_uri="memory://",
 )
 
-DOWNLOAD_FOLDER = os.path.expanduser('~/storage/shared/MusicDownloads')
-STATS_FILE = os.path.expanduser('~/storage/shared/MusicDownloads/stats.json')
+# Bulut sunuculara uygun geçici indirme dizinleri
+DOWNLOAD_FOLDER = "/tmp/MusicDownloads"
+STATS_FILE = "/tmp/stats.json"
 
 if not os.path.exists(DOWNLOAD_FOLDER):
-    os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
+  os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
+
 
 def load_stats():
-    if os.path.exists(STATS_FILE):
-        try:
-            with open(STATS_FILE, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except Exception:
-            return {}
-    return {}
+  if os.path.exists(STATS_FILE):
+    try:
+      with open(STATS_FILE, "r", encoding="utf-8") as f:
+        return json.load(f)
+    except Exception:
+      return {}
+  return {}
+
 
 def save_stats(stats):
-    try:
-        with open(STATS_FILE, 'w', encoding='utf-8') as f:
-            json.dump(stats, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        print(f"Stats kaydetme hatasi: {e}")
+  try:
+    with open(STATS_FILE, "w", encoding="utf-8") as f:
+      json.dump(stats, f, ensure_ascii=False, indent=2)
+  except Exception as e:
+    print(f"Stats kaydetme hatasi: {e}")
+
 
 user_stats = load_stats()
 
+
 def track_user_action(ip, action_type):
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    if ip not in user_stats:
-        user_stats[ip] = {"plays": 0, "mp3": 0, "mp4": 0, "last_active": now, "banned": False}
-    user_stats[ip]["last_active"] = now
-    if action_type in user_stats[ip]:
-        user_stats[ip][action_type] += 1
-    save_stats(user_stats)
+  now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+  if ip not in user_stats:
+    user_stats[ip] = {
+        "plays": 0,
+        "mp3": 0,
+        "mp4": 0,
+        "last_active": now,
+        "banned": False,
+    }
+  user_stats[ip]["last_active"] = now
+  if action_type in user_stats[ip]:
+    user_stats[ip][action_type] += 1
+  save_stats(user_stats)
+
 
 @app.before_request
 def check_ip_ban():
-    ip = request.remote_addr
-    if request.path.startswith('/admin'):
-        return
-    if ip in user_stats and user_stats[ip].get("banned", False):
-        return jsonify({"error": "Erişiminiz engellenmiştir."}), 403
+  ip = request.remote_addr
+  if request.path.startswith("/admin"):
+    return
+  if ip in user_stats and user_stats[ip].get("banned", False):
+    return jsonify({"error": "Erişiminiz engellenmiştir."}), 403
+
 
 @app.after_request
 def add_security_headers(response):
-    response.headers['X-Content-Type-Options'] = 'nosniff'
-    response.headers['X-Frame-Options'] = 'DENY'
-    response.headers['X-XSS-Protection'] = '1; mode=block'
-    return response
+  response.headers["X-Content-Type-Options"] = "nosniff"
+  response.headers["X-Frame-Options"] = "DENY"
+  response.headers["X-XSS-Protection"] = "1; mode=block"
+  return response
+
 
 def is_valid_youtube_url(url):
-    if not url:
-        return False
-    parsed = urllib.parse.urlparse(url)
-    allowed_domains = ['youtube.com', 'www.youtube.com', 'm.youtube.com', 'youtu.be']
-    return parsed.netloc in allowed_domains
+  if not url:
+    return False
+  parsed = urllib.parse.urlparse(url)
+  allowed_domains = [
+      "youtube.com",
+      "www.youtube.com",
+      "m.youtube.com",
+      "youtu.be",
+  ]
+  return parsed.netloc in allowed_domains
 
+
+# Arayüz HTML Kodu
 USER_HTML = """
 <!DOCTYPE html>
 <html lang="tr">
@@ -284,294 +313,192 @@ ADMIN_HTML = """
 <html lang="tr">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>HMusic - Yönetim Paneli</title>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
-        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', sans-serif; }
-        body { background-color: #0b0e14; color: #f3f4f6; padding: 20px; }
-        .container { max-width: 1000px; margin: 0 auto; }
-        .admin-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 25px; }
-        .admin-header h1 { font-size: 22px; color: #10b981; }
-        .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 25px; }
-        .stat-card { background: #171c26; padding: 16px; border-radius: 12px; border: 1px solid #232a3b; }
-        .stat-card h3 { font-size: 11px; color: #9ca3af; text-transform: uppercase; margin-bottom: 4px; }
-        .stat-card p { font-size: 20px; font-weight: 700; color: #fff; }
-        .table-container { background: #171c26; border-radius: 12px; border: 1px solid #232a3b; overflow-x: auto; }
-        table { width: 100%; border-collapse: collapse; text-align: left; }
-        th, td { padding: 12px 14px; font-size: 12px; border-bottom: 1px solid #202738; }
-        th { background: #11151f; color: #9ca3af; }
-        .badge { padding: 3px 6px; border-radius: 4px; font-size: 10px; font-weight: 600; }
-        .badge-active { background: rgba(16, 185, 129, 0.2); color: #10b981; }
-        .badge-banned { background: rgba(239, 68, 68, 0.2); color: #ef4444; }
-        .btn-action { border: none; padding: 5px 10px; border-radius: 6px; font-size: 11px; font-weight: 600; cursor: pointer; }
-        .btn-ban { background: #ef4444; color: #fff; }
-        .btn-unban { background: #10b981; color: #fff; }
+        body { background-color: #0b0e14; color: #f3f4f6; font-family: sans-serif; padding: 20px; }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        th, td { border: 1px solid #232a3b; padding: 10px; text-align: left; }
+        th { background: #171c26; }
     </style>
 </head>
 <body>
-    <div class="container">
-        <div class="admin-header">
-            <h1>HMusic Yönetim Paneli</h1>
-        </div>
-        <div class="stats-grid">
-            <div class="stat-card">
-                <h3>Toplam Ziyaretçi</h3>
-                <p>{{ total_users }}</p>
-            </div>
-            <div class="stat-card">
-                <h3>Toplam Dinleme</h3>
-                <p>{{ total_plays }}</p>
-            </div>
-            <div class="stat-card">
-                <h3>İndirilen MP3</h3>
-                <p>{{ total_mp3 }}</p>
-            </div>
-            <div class="stat-card">
-                <h3>İndirilen MP4</h3>
-                <p>{{ total_mp4 }}</p>
-            </div>
-        </div>
-        <div class="table-container">
-            <table>
-                <thead>
-                    <tr>
-                        <th>IP Adresi</th>
-                        <th>Dinleme</th>
-                        <th>MP3</th>
-                        <th>MP4</th>
-                        <th>Son Aktiflik</th>
-                        <th>Durum</th>
-                        <th>İşlem</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for ip, stats in users.items() %}
-                    <tr>
-                        <td><strong>{{ ip }}</strong></td>
-                        <td>{{ stats.plays }}</td>
-                        <td>{{ stats.mp3 }}</td>
-                        <td>{{ stats.mp4 }}</td>
-                        <td>{{ stats.last_active }}</td>
-                        <td>
-                            {% if stats.banned %}
-                            <span class="badge badge-banned">Banlı</span>
-                            {% else %}
-                            <span class="badge badge-active">Aktif</span>
-                            {% endif %}
-                        </td>
-                        <td>
-                            {% if stats.banned %}
-                            <a href="/admin/unban?ip={{ ip }}&key={{ secret_key }}"><button class="btn-action btn-unban">Ban Kaldır</button></a>
-                            {% else %}
-                            <a href="/admin/ban?ip={{ ip }}&key={{ secret_key }}"><button class="btn-action btn-ban">Banla</button></a>
-                            {% endif %}
-                        </td>
-                    </tr>
-                    {% endfor %}
-                    {% if not users %}
-                    <tr>
-                        <td colspan="7" style="text-align: center; color: #6b7280;">Henüz kullanıcı kaydı yok.</td>
-                    </tr>
-                    {% endif %}
-                </tbody>
-            </table>
-        </div>
-    </div>
+    <h1>Yönetim Paneli</h1>
+    <p>Toplam Kullanıcı: {{ total_users }}</p>
+    <table>
+        <tr><th>IP</th><th>Dinleme</th><th>MP3</th><th>MP4</th><th>Son Aktiflik</th></tr>
+        {% for ip, stats in users.items() %}
+        <tr>
+            <td>{{ ip }}</td>
+            <td>{{ stats.plays }}</td>
+            <td>{{ stats.mp3 }}</td>
+            <td>{{ stats.mp4 }}</td>
+            <td>{{ stats.last_active }}</td>
+        </tr>
+        {% endfor %}
+    </table>
 </body>
 </html>
 """
 
-@app.route('/')
+
+@app.route("/")
 def home():
-    ip = request.remote_addr
-    track_user_action(ip, None)
-    return render_template_string(USER_HTML)
+  ip = request.remote_addr
+  track_user_action(ip, None)
+  return render_template_string(USER_HTML)
 
-@app.route('/admin')
+
+@app.route("/admin")
 def admin_panel():
-    key = request.args.get('key')
-    if key != ADMIN_SECRET_KEY:
-        abort(404) # Doğru gizli anahtar verilmezse 404 hatası verir (sayfa yokmuş gibi)
-    
-    total_users = len(user_stats)
-    total_plays = sum(u['plays'] for u in user_stats.values())
-    total_mp3 = sum(u['mp3'] for u in user_stats.values())
-    total_mp4 = sum(u['mp4'] for u in user_stats.values())
+  key = request.args.get("key")
+  if key != ADMIN_SECRET_KEY:
+    abort(404)
 
-    return render_template_string(
-        ADMIN_HTML,
-        users=user_stats,
-        total_users=total_users,
-        total_plays=total_plays,
-        total_mp3=total_mp3,
-        total_mp4=total_mp4,
-        secret_key=ADMIN_SECRET_KEY
-    )
+  total_users = len(user_stats)
+  total_plays = sum(u["plays"] for u in user_stats.values())
+  total_mp3 = sum(u["mp3"] for u in user_stats.values())
+  total_mp4 = sum(u["mp4"] for u in user_stats.values())
 
-@app.route('/admin/ban')
-def admin_ban_ip():
-    key = request.args.get('key')
-    if key != ADMIN_SECRET_KEY:
-        abort(404)
-    ip = request.args.get('ip')
-    if ip in user_stats:
-        user_stats[ip]['banned'] = True
-        save_stats(user_stats)
-    return redirect(url_for('admin_panel', key=ADMIN_SECRET_KEY))
+  return render_template_string(
+      ADMIN_HTML,
+      users=user_stats,
+      total_users=total_users,
+      total_plays=total_plays,
+      total_mp3=total_mp3,
+      total_mp4=total_mp4,
+      secret_key=ADMIN_SECRET_KEY,
+  )
 
-@app.route('/admin/unban')
-def admin_unban_ip():
-    key = request.args.get('key')
-    if key != ADMIN_SECRET_KEY:
-        abort(404)
-    ip = request.args.get('ip')
-    if ip in user_stats:
-        user_stats[ip]['banned'] = False
-        save_stats(user_stats)
-    return redirect(url_for('admin_panel', key=ADMIN_SECRET_KEY))
 
-@app.route('/api/search', methods=['GET'])
-@limiter.limit("15 per minute")
+@app.route("/api/search", methods=["GET"])
+@limiter.limit("30 per minute")
 def search_music():
-    ip = request.remote_addr
-    track_user_action(ip, None)
-    
-    query = request.args.get('q', '').strip()
-    if not query or len(query) > 100:
-        return jsonify({"error": "Geçersiz arama terimi"}), 400
-    
-    clean_query = re.sub(r'[^\w\s\d\-]', '', query)
+  ip = request.remote_addr
+  track_user_action(ip, None)
 
-    invidious_nodes = [
-        f"https://inv.tux.pizza/api/v1/search?q={clean_query}&type=video",
-        f"https://vid.puffyan.us/api/v1/search?q={clean_query}&type=video"
-    ]
+  query = request.args.get("q", "").strip()
+  if not query or len(query) > 100:
+    return jsonify({"error": "Geçersiz arama terimi"}), 400
 
-    for node in invidious_nodes:
-        try:
-            res = requests.get(node, timeout=3)
-            if res.status_code == 200:
-                data = res.json()
-                results = []
-                for item in data[:10]:
-                    results.append({
-                        'id': item.get('videoId'),
-                        'title': item.get('title'),
-                        'url': f"https://www.youtube.com/watch?v={item.get('videoId')}",
-                        'thumbnail': f"https://i.ytimg.com/vi/{item.get('videoId')}/hqdefault.jpg"
-                    })
-                return jsonify(results)
-        except Exception:
-            continue
+  clean_query = re.sub(r"[^\w\s\d\-]", "", query)
 
-    try:
-        ydl_opts = {
-            'skip_download': True,
-            'quiet': True,
-            'extract_flat': True,
-            'extractor_args': {'youtube': {'player_client': ['android']}}
-        }
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(f"ytsearch10:{clean_query}", download=False)
-            results = []
-            for entry in info.get('entries', []):
-                if entry:
-                    results.append({
-                        'id': entry.get('id'),
-                        'title': entry.get('title'),
-                        'url': f"https://www.youtube.com/watch?v={entry.get('id')}",
-                        'thumbnail': f"https://i.ytimg.com/vi/{entry.get('id')}/hqdefault.jpg"
-                    })
-            return jsonify(results)
-    except Exception:
-        return jsonify({"error": "Arama işlemi gerçekleştirilemedi."}), 500
-
-def process_youtube_mp3(url):
-    out_template = f"{DOWNLOAD_FOLDER}/%(id)s.%(ext)s"
+  try:
     ydl_opts = {
-        'format': 'bestaudio/best',
-        'outtmpl': out_template,
-        'postprocessors': [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'mp3',
-            'preferredquality': '192',
-        }],
-        'quiet': True,
-        'extractor_args': {'youtube': {'player_client': ['android', 'ios']}}
+        "skip_download": True,
+        "quiet": True,
+        "extract_flat": True,
+        "extractor_args": {"youtube": {"player_client": ["android", "web"]}},
     }
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=True)
-        file_path = f"{DOWNLOAD_FOLDER}/{info['id']}.mp3"
-        return file_path, info.get('title', 'muzik')
+      info = ydl.extract_info(f"ytsearch10:{clean_query}", download=False)
+      results = []
+      for entry in info.get("entries", []):
+        if entry:
+          results.append({
+              "id": entry.get("id"),
+              "title": entry.get("title"),
+              "url": f"https://www.youtube.com/watch?v={entry.get('id')}",
+              "thumbnail": (
+                  f"https://i.ytimg.com/vi/{entry.get('id')}/hqdefault.jpg"
+              ),
+          })
+      return jsonify(results)
+  except Exception:
+    return jsonify({"error": "Arama gerçekleştirilemedi."}), 500
 
-def process_youtube_mp4(url):
-    out_template = f"{DOWNLOAD_FOLDER}/%(id)s_video.%(ext)s"
-    ydl_opts = {
-        'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-        'outtmpl': out_template,
-        'quiet': True,
-        'extractor_args': {'youtube': {'player_client': ['android', 'ios']}}
-    }
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=True)
-        file_path = f"{DOWNLOAD_FOLDER}/{info['id']}_video.mp4"
-        return file_path, info.get('title', 'video')
 
-@app.route('/api/stream', methods=['GET'])
-@limiter.limit("20 per minute")
+# CANLI STREAM (Anında Başlatır)
+@app.route("/api/stream", methods=["GET"])
 def stream_audio():
-    ip = request.remote_addr
-    track_user_action(ip, "plays")
-    
-    url = request.args.get('url')
-    if not is_valid_youtube_url(url):
-        return jsonify({"error": "Geçersiz veya yetkisiz URL"}), 400
-    try:
-        file_path, _ = process_youtube_mp3(url)
-        return send_file(file_path, mimetype='audio/mpeg')
-    except Exception:
-        return jsonify({"error": "Ses akışı başlatılamadı."}), 500
+  ip = request.remote_addr
+  track_user_action(ip, "plays")
 
-@app.route('/api/download', methods=['GET'])
-@limiter.limit("5 per minute")
+  url = request.args.get("url")
+  if not is_valid_youtube_url(url):
+    return jsonify({"error": "Geçersiz URL"}), 400
+
+  try:
+    ydl_opts = {
+        "format": "bestaudio/best",
+        "quiet": True,
+        "nocheckcertificate": True,
+        "extractor_args": {"youtube": {"player_client": ["android"]}},
+    }
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+      info = ydl.extract_info(url, download=False)
+      # Dosyayı sunucuya indirmeden doğrudan yönlendirir
+      return redirect(info["url"])
+  except Exception as e:
+    return jsonify({"error": str(e)}), 500
+
+
+# MP3 İNDİRME
+@app.route("/api/download", methods=["GET"])
 def download_audio():
-    ip = request.remote_addr
-    track_user_action(ip, "mp3")
-    
-    url = request.args.get('url')
-    if not is_valid_youtube_url(url):
-        return jsonify({"error": "Geçersiz veya yetkisiz URL"}), 400
-    try:
-        file_path, title = process_youtube_mp3(url)
-        clean_title = re.sub(r'[^\w\s\d\-]', '', title).strip()
-        return send_file(file_path, as_attachment=True, download_name=f"{clean_title}.mp3", mimetype='audio/mpeg')
-    except Exception:
-        return jsonify({"error": "İndirme başarısız."}), 500
+  ip = request.remote_addr
+  track_user_action(ip, "mp3")
 
-@app.route('/api/download-mp4', methods=['GET'])
-@limiter.limit("3 per minute")
+  url = request.args.get("url")
+  if not is_valid_youtube_url(url):
+    return jsonify({"error": "Geçersiz URL"}), 400
+
+  try:
+    ydl_opts = {
+        "format": "bestaudio/best",
+        "outtmpl": f"{DOWNLOAD_FOLDER}/%(id)s.%(ext)s",
+        "postprocessors": [{
+            "key": "FFmpegExtractAudio",
+            "preferredcodec": "mp3",
+            "preferredquality": "192",
+        }],
+        "quiet": True,
+    }
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+      info = ydl.extract_info(url, download=True)
+      filename = f"{DOWNLOAD_FOLDER}/{info['id']}.mp3"
+      clean_title = re.sub(r"[^\w\s\d\-]", "", info.get("title", "music"))
+      return send_file(
+          filename,
+          as_attachment=True,
+          download_name=f"{clean_title}.mp3",
+          mimetype="audio/mpeg",
+      )
+  except Exception as e:
+    return jsonify({"error": f"İndirme başarısız: {str(e)}"}), 500
+
+
+# MP4 İNDİRME
+@app.route("/api/download-mp4", methods=["GET"])
 def download_video():
-    ip = request.remote_addr
-    track_user_action(ip, "mp4")
-    
-    url = request.args.get('url')
-    if not is_valid_youtube_url(url):
-        return jsonify({"error": "Geçersiz veya yetkisiz URL"}), 400
-    try:
-        file_path, title = process_youtube_mp4(url)
-        clean_title = re.sub(r'[^\w\s\d\-]', '', title).strip()
-        return send_file(file_path, as_attachment=True, download_name=f"{clean_title}.mp4", mimetype='video/mp4')
-    except Exception:
-        return jsonify({"error": "Video indirme başarısız."}), 500
+  ip = request.remote_addr
+  track_user_action(ip, "mp4")
 
-@app.errorhandler(429)
-def ratelimit_handler(e):
-    return jsonify({"error": "Çok fazla istek gönderdiniz. Lütfen bir süre bekleyin."}), 429
+  url = request.args.get("url")
+  if not is_valid_youtube_url(url):
+    return jsonify({"error": "Geçersiz URL"}), 400
 
-if __name__ == '__main__':
-    print("\n" + "="*50)
-    print(" GİZLİ ADMİN PANELİ LİNKİNİZ:")
-    print(f" http://127.0.0.1:5000/admin?key={ADMIN_SECRET_KEY}")
-    print("="*50 + "\n")
-    app.run(host='0.0.0.0', port=5000, debug=False)
+  try:
+    ydl_opts = {
+        "format": (
+            "bestvideo[ext=mp4][height<=720]+bestaudio[ext=m4a]/best[ext=mp4]/best"
+        ),
+        "outtmpl": f"{DOWNLOAD_FOLDER}/%(id)s_video.%(ext)s",
+        "quiet": True,
+    }
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+      info = ydl.extract_info(url, download=True)
+      filename = f"{DOWNLOAD_FOLDER}/{info['id']}_video.mp4"
+      clean_title = re.sub(r"[^\w\s\d\-]", "", info.get("title", "video"))
+      return send_file(
+          filename,
+          as_attachment=True,
+          download_name=f"{clean_title}.mp4",
+          mimetype="video/mp4",
+      )
+  except Exception as e:
+    return jsonify({"error": f"Video indirme başarısız: {str(e)}"}), 500
+
+
+if __name__ == "__main__":
+  port = int(os.environ.get("PORT", 5000))
+  app.run(host="0.0.0.0", port=port, debug=False)
