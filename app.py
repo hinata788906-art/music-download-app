@@ -10,11 +10,11 @@ import json
 import secrets
 import urllib.parse
 from datetime import datetime
+import tempfile
 
 app = Flask(__name__)
 app.secret_key = os.urandom(32)
 
-# Termux her çalıştığında tamamen rastgele ve tahmin edilemez bir admin key üretir
 ADMIN_SECRET_KEY = secrets.token_hex(16)
 
 CORS(app)
@@ -26,59 +26,10 @@ limiter = Limiter(
     storage_uri="memory://"
 )
 
-BASE_STORAGE_DIR = os.path.expanduser('~/storage')
-DEFAULT_DOWNLOAD_FOLDER = os.path.join(BASE_STORAGE_DIR, 'shared', 'MusicDownloads')
-STATS_FILE = os.path.expanduser('~/storage/shared/MusicDownloads/stats.json')
-CONFIG_FILE = os.path.expanduser('~/.hmusic_config.json')
-
-def load_config():
-    if os.path.exists(CONFIG_FILE):
-        try:
-            with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except Exception:
-            return {}
-    return {}
-
-def save_config(cfg):
-    try:
-        with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
-            json.dump(cfg, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        print(f"Ayar kaydetme hatasi: {e}")
-
-app_config = load_config()
-DOWNLOAD_FOLDER = app_config.get('download_folder', DEFAULT_DOWNLOAD_FOLDER)
-
-if not os.path.exists(DOWNLOAD_FOLDER):
-    os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
-
-def get_storage_options():
-    """Termux ~/storage altındaki dahili depolamayı ve takılı SD kart(lar)ı listeler."""
-    options = []
-    try:
-        if os.path.isdir(BASE_STORAGE_DIR):
-            for entry in sorted(os.listdir(BASE_STORAGE_DIR)):
-                full = os.path.join(BASE_STORAGE_DIR, entry)
-                if not os.path.isdir(full):
-                    continue
-                if entry == 'shared':
-                    label = 'Dahili Depolama'
-                elif entry.startswith('external'):
-                    suffix = entry.replace('external-', '').replace('external', '').strip()
-                    label = 'SD Kart' + (f' {suffix}' if suffix else '')
-                else:
-                    continue
-                options.append({
-                    'key': entry,
-                    'label': label,
-                    'path': os.path.join(full, 'MusicDownloads')
-                })
-    except Exception:
-        pass
-    if not options:
-        options.append({'key': 'shared', 'label': 'Dahili Depolama', 'path': DEFAULT_DOWNLOAD_FOLDER})
-    return options
+# Railway ve geçici işlemler için temp klasörünün kullanımı
+DOWNLOAD_FOLDER = tempfile.gettempdir()
+STATS_FILE = os.path.join(DOWNLOAD_FOLDER, 'hmusic_stats.json')
+LIBRARY_FILE = os.path.join(DOWNLOAD_FOLDER, 'hmusic_library.json')
 
 def load_stats():
     if os.path.exists(STATS_FILE):
@@ -97,8 +48,6 @@ def save_stats(stats):
         print(f"Stats kaydetme hatasi: {e}")
 
 user_stats = load_stats()
-
-LIBRARY_FILE = os.path.expanduser('~/storage/shared/MusicDownloads/library.json')
 
 def load_library():
     if os.path.exists(LIBRARY_FILE):
@@ -128,7 +77,6 @@ def get_user_lib(ip):
     return user_library[ip]
 
 def clean_song_payload(data):
-    """Gelen şarkı verisini doğrular ve güvenli hale getirir."""
     song_id = (data.get('id') or '').strip()
     url = (data.get('url') or '').strip()
     if not song_id or not is_valid_youtube_url(url):
@@ -224,21 +172,6 @@ USER_HTML = """
         .player-next-btn { width: 34px; height: 34px; border-radius: 50%; background: #202738; border: none; color: #f3f4f6; display: flex; align-items: center; justify-content: center; cursor: pointer; }
         .player-next-btn svg { width: 16px; height: 16px; fill: currentColor; }
 
-        .storage-modal { background: #12161f; border: 1px solid #232a3b; border-radius: 20px 20px 0 0; width: 100%; max-width: 480px; padding: 20px 20px 28px 20px; transform: translateY(24px); transition: transform 0.28s ease; }
-        .overlay-bg.active .storage-modal { transform: translateY(0); }
-        .storage-list { display: flex; flex-direction: column; gap: 10px; margin-top: 16px; }
-        .storage-item { display: flex; align-items: center; gap: 12px; background: #171c26; border: 1px solid #232a3b; border-radius: 14px; padding: 12px 14px; cursor: pointer; }
-        .storage-item.active { border-color: #10b981; background: rgba(16, 185, 129, 0.08); }
-        .storage-item-icon { width: 36px; height: 36px; border-radius: 10px; background: rgba(16, 185, 129, 0.12); color: #10b981; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
-        .storage-item-icon svg { width: 18px; height: 18px; fill: currentColor; }
-        .storage-item-info { flex: 1; overflow: hidden; }
-        .storage-item-label { font-size: 13px; font-weight: 600; color: #f3f4f6; }
-        .storage-item-path { font-size: 10px; color: #6b7280; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .storage-item-check { width: 18px; height: 18px; border-radius: 50%; border: 2px solid #2a3447; flex-shrink: 0; display: flex; align-items: center; justify-content: center; }
-        .storage-item.active .storage-item-check { border-color: #10b981; background: #10b981; }
-        .storage-item-check svg { width: 11px; height: 11px; fill: #0b0e14; display: none; }
-        .storage-item.active .storage-item-check svg { display: block; }
-        .storage-status { font-size: 11px; color: #10b981; margin-top: 12px; min-height: 14px; }
         .search-box { display: flex; gap: 10px; background: #171c26; padding: 6px; border-radius: 14px; border: 1px solid #232a3b; }
         .search-box input { flex: 1; border: none; background: transparent; padding: 12px 16px; color: #fff; font-size: 15px; outline: none; }
         .search-box button { background: #10b981; border: none; color: #fff; padding: 0 20px; border-radius: 10px; font-weight: 600; cursor: pointer; }
@@ -281,8 +214,8 @@ USER_HTML = """
         .playlist-card-name { font-size: 14px; font-weight: 600; color: #f3f4f6; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .playlist-card-count { font-size: 11px; color: #6b7280; margin-top: 2px; }
 
-        .action-sheet, .storage-modal.picker-modal { background: #12161f; border: 1px solid #232a3b; border-radius: 20px 20px 0 0; width: 100%; max-width: 480px; padding: 18px 20px 26px 20px; transform: translateY(24px); transition: transform 0.28s ease; }
-        .overlay-bg.active .action-sheet { transform: translateY(0); }
+        .action-sheet, .storage-modal { background: #12161f; border: 1px solid #232a3b; border-radius: 20px 20px 0 0; width: 100%; max-width: 480px; padding: 18px 20px 26px 20px; transform: translateY(24px); transition: transform 0.28s ease; }
+        .overlay-bg.active .action-sheet, .overlay-bg.active .storage-modal { transform: translateY(0); }
         .action-sheet-title { font-size: 13px; font-weight: 700; color: #f3f4f6; margin-bottom: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .action-sheet-item { display: flex; align-items: center; gap: 12px; padding: 13px 6px; border-radius: 10px; cursor: pointer; color: #f3f4f6; font-size: 13px; font-weight: 500; border-bottom: 1px solid #1c2230; }
         .action-sheet-item:last-child { border-bottom: none; }
@@ -290,6 +223,14 @@ USER_HTML = """
         .action-sheet-item svg { width: 18px; height: 18px; fill: #10b981; flex-shrink: 0; }
         .action-sheet-item.danger svg { fill: #ef4444; }
         .action-sheet-item.danger span { color: #ef4444; }
+        .storage-list { display: flex; flex-direction: column; gap: 10px; margin-top: 16px; }
+        .storage-item { display: flex; align-items: center; gap: 12px; background: #171c26; border: 1px solid #232a3b; border-radius: 14px; padding: 12px 14px; cursor: pointer; }
+        .storage-item.active { border-color: #10b981; background: rgba(16, 185, 129, 0.08); }
+        .storage-item-icon { width: 36px; height: 36px; border-radius: 10px; background: rgba(16, 185, 129, 0.12); color: #10b981; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+        .storage-item-icon svg { width: 18px; height: 18px; fill: currentColor; }
+        .storage-item-info { flex: 1; overflow: hidden; }
+        .storage-item-label { font-size: 13px; font-weight: 600; color: #f3f4f6; }
+        .storage-item-path { font-size: 10px; color: #6b7280; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .new-playlist-row { display: flex; gap: 8px; margin-top: 10px; }
         .new-playlist-row input { flex: 1; background: #171c26; border: 1px solid #232a3b; border-radius: 10px; padding: 11px 12px; color: #fff; font-size: 13px; outline: none; }
         .new-playlist-row button { background: #10b981; border: none; color: #fff; padding: 0 16px; border-radius: 10px; font-weight: 600; cursor: pointer; }
@@ -318,24 +259,6 @@ USER_HTML = """
         <div class="settings-item" onclick="openEqualizer()">
             <svg viewBox="0 0 24 24"><path d="M3 17h4v-7H3v7zm7 4h4V3h-4v18zm7-11v11h4V10h-4z"/></svg>
             <span>Ses Efektleri</span>
-        </div>
-        <div class="settings-item" onclick="openStorageSettings()">
-            <svg viewBox="0 0 24 24"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zM5 19V5h14v14H5zM7 10h2v7H7v-7zm4-3h2v10h-2V7zm4 5h2v5h-2v-5z"/></svg>
-            <span>İndirme Konumu</span>
-        </div>
-    </div>
-
-    <div class="overlay-bg" id="storageOverlay" onclick="if(event.target===this) closeStorageSettings()">
-        <div class="storage-modal">
-            <div class="eq-header">
-                <h2>İndirme Konumu</h2>
-                <button class="eq-close-btn" onclick="closeStorageSettings()">✕</button>
-            </div>
-            <p class="eq-sub">İndirilen müziklerin kaydedileceği depolama alanını seçin</p>
-            <div class="storage-list" id="storageList">
-                <p style="text-align:center; color:#6b7280; font-size:12px;">Yükleniyor...</p>
-            </div>
-            <p class="storage-status" id="storageStatus"></p>
         </div>
     </div>
 
@@ -390,7 +313,7 @@ USER_HTML = """
 
     <div class="header">
         <h1>HMusic</h1>
-        <p>Ağsız Müzik ve Video Deneyimi</p>
+        <p>Bulut Tabanlı Müzik ve Video Deneyimi</p>
     </div>
 
     <div class="tab-bar">
@@ -460,7 +383,7 @@ USER_HTML = """
                 <input type="text" id="newPlaylistNameInput" maxlength="60" placeholder="Yeni liste adı...">
                 <button onclick="createPlaylistFromPicker()">Oluştur</button>
             </div>
-            <p class="storage-status" id="addToPlaylistStatus"></p>
+            <p class="storage-status" id="addToPlaylistStatus" style="font-size:11px; margin-top:10px;"></p>
         </div>
     </div>
 
@@ -532,7 +455,6 @@ USER_HTML = """
         return [];
     }
 
-    // ---------- Şarkı kartı üretimi (arama / favoriler / çalma listesi ortak) ----------
     function songCardHTML(item, queueType, index) {
         const isFav = favoriteIds.has(item.id);
         return `
@@ -570,7 +492,6 @@ USER_HTML = """
         });
     }
 
-    // ---------- Arama ----------
     async function searchMusic() {
         const query = document.getElementById('searchInput').value.trim();
         if (!query) return;
@@ -594,7 +515,6 @@ USER_HTML = """
         }
     }
 
-    // ---------- Sekmeler ----------
     function switchTab(tab) {
         document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
         document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
@@ -611,7 +531,7 @@ USER_HTML = """
             favoritesData = data.favorites || [];
             favoriteIds = new Set(favoritesData.map(s => s.id));
             playlistsData = data.playlists || [];
-        } catch (err) { /* sessizce geç */ }
+        } catch (err) {}
     }
 
     async function loadFavoritesTab() {
@@ -649,7 +569,6 @@ USER_HTML = """
         });
     }
 
-    // ---------- Favoriler ----------
     async function toggleFavoriteFromCard(btn, queueType, index) {
         const item = getQueueArray(queueType)[index];
         if (!item) return;
@@ -669,10 +588,9 @@ USER_HTML = """
             if (queueType === 'favorites') {
                 renderCardList(document.getElementById('favoritesList'), favoritesData, 'favorites', 'Henüz favori şarkınız yok.');
             }
-        } catch (err) { /* sessizce geç */ }
+        } catch (err) {}
     }
 
-    // ---------- Çalma Listeleri ----------
     function openCreatePlaylistPrompt() {
         const name = prompt('Yeni çalma listesi adı:');
         if (!name || !name.trim()) return;
@@ -704,7 +622,7 @@ USER_HTML = """
             document.getElementById('playlistDetailName').innerText = data.name;
             renderCardList(document.getElementById('playlistDetailSongs'), activePlaylistSongs, 'playlist', 'Bu listede henüz şarkı yok.');
             document.getElementById('playlistDetailOverlay').classList.add('active');
-        } catch (err) { /* sessizce geç */ }
+        } catch (err) {}
     }
 
     function closePlaylistDetail() {
@@ -724,10 +642,9 @@ USER_HTML = """
             playlistsData = playlistsData.filter(p => p.id !== activePlaylistId);
             renderPlaylistGrid();
             closePlaylistDetail();
-        } catch (err) { /* sessizce geç */ }
+        } catch (err) {}
     }
 
-    // ---------- Alt sayfa (action sheet) ----------
     function openActionSheet(queueType, index) {
         const item = getQueueArray(queueType)[index];
         if (!item) return;
@@ -761,10 +678,9 @@ USER_HTML = """
             renderCardList(document.getElementById('playlistDetailSongs'), activePlaylistSongs, 'playlist', 'Bu listede henüz şarkı yok.');
             const pl = playlistsData.find(p => p.id === activePlaylistId);
             if (pl) pl.count = activePlaylistSongs.length;
-        } catch (err) { /* sessizce geç */ }
+        } catch (err) {}
     }
 
-    // ---------- Çalma listesine ekleme seçici ----------
     async function actionSheetAddToPlaylist() {
         closeActionSheet();
         await loadLibrary();
@@ -791,7 +707,6 @@ USER_HTML = """
                     <div class="storage-item-label">${pl.name}</div>
                     <div class="storage-item-path">${pl.count} şarkı</div>
                 </div>
-                <div class="storage-item-check"><svg viewBox="0 0 24 24"><path d="M9 16.2L4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4z"/></svg></div>
             `;
             item.onclick = () => addSongToPlaylist(pl.id, item);
             listEl.appendChild(item);
@@ -835,7 +750,7 @@ USER_HTML = """
         if (id) {
             renderAddToPlaylistList();
             document.getElementById('addToPlaylistStatus').style.color = '#10b981';
-            document.getElementById('addToPlaylistStatus').innerText = 'Liste oluşturuldu, şimdi şarkıya dokunun.';
+            document.getElementById('addToPlaylistStatus').innerText = 'Liste oluşturuldu!';
         }
     }
 
@@ -843,7 +758,6 @@ USER_HTML = """
         document.getElementById('addToPlaylistOverlay').classList.remove('active');
     }
 
-    // ---------- Çalma motoru (arama / favoriler / çalma listesi ortak kuyruk) ----------
     function playSong(btn, queueType, index) {
         const list = getQueueArray(queueType);
         const item = list[index];
@@ -914,7 +828,6 @@ USER_HTML = """
         return `${m}:${s < 10 ? '0' : ''}${s}`;
     }
 
-    // ---------- Ayarlar Paneli ----------
     function toggleSettings(e) {
         if (e) e.stopPropagation();
         document.getElementById('settingsPanel').classList.toggle('active');
@@ -927,7 +840,6 @@ USER_HTML = """
         }
     });
 
-    // ---------- Ekolayzır & 8D (Web Audio API) ----------
     let audioCtx = null;
     let sourceNode = null;
     let eqFilters = [];
@@ -978,7 +890,6 @@ USER_HTML = """
             let prevNode = sourceNode;
             eqFilters.forEach(f => { prevNode.connect(f); prevNode = f; });
 
-            // Sinema Ses (Surround): dinamik/netlik işleme + algoritmik yankı + stereo genişletme
             compressorNode = audioCtx.createDynamicsCompressor();
             compressorNode.threshold.value = -18;
             compressorNode.knee.value = 24;
@@ -1172,7 +1083,6 @@ USER_HTML = """
 
     function onEqToggle() {
         eqEnabled = document.getElementById('eqEnabledToggle').checked;
-        const targetGains = eqEnabled ? null : [0, 0, 0, 0, 0];
         if (!eqEnabled) {
             eqFilters.forEach(f => { f.gain.value = 0; });
         } else {
@@ -1202,80 +1112,6 @@ USER_HTML = """
 
     function closeEqualizer() {
         document.getElementById('eqOverlay').classList.remove('active');
-    }
-
-    // ---------- İndirme Konumu ----------
-    const folderIconSvg = '<svg viewBox="0 0 24 24"><path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>';
-
-    async function openStorageSettings() {
-        document.getElementById('settingsPanel').classList.remove('active');
-        document.getElementById('storageOverlay').classList.add('active');
-        document.getElementById('storageStatus').innerText = '';
-        const listEl = document.getElementById('storageList');
-        listEl.innerHTML = '<p style="text-align:center; color:#6b7280; font-size:12px;">Yükleniyor...</p>';
-        try {
-            const res = await fetch('/api/settings/storage');
-            const data = await res.json();
-            renderStorageList(data.options || [], data.current || '');
-        } catch (err) {
-            listEl.innerHTML = '<p style="text-align:center; color:#ef4444; font-size:12px;">Depolama bilgisi alınamadı.</p>';
-        }
-    }
-
-    function renderStorageList(options, current) {
-        const listEl = document.getElementById('storageList');
-        listEl.innerHTML = '';
-        if (!options.length) {
-            listEl.innerHTML = '<p style="text-align:center; color:#6b7280; font-size:12px;">Depolama bulunamadı.</p>';
-            return;
-        }
-        options.forEach(opt => {
-            const isActive = opt.path === current;
-            const item = document.createElement('div');
-            item.className = 'storage-item' + (isActive ? ' active' : '');
-            item.onclick = () => selectStorage(opt.key, item);
-            item.innerHTML = `
-                <div class="storage-item-icon">${folderIconSvg}</div>
-                <div class="storage-item-info">
-                    <div class="storage-item-label">${opt.label}</div>
-                    <div class="storage-item-path">${opt.path}</div>
-                </div>
-                <div class="storage-item-check">
-                    <svg viewBox="0 0 24 24"><path d="M9 16.2L4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4z"/></svg>
-                </div>
-            `;
-            listEl.appendChild(item);
-        });
-    }
-
-    async function selectStorage(key, itemEl) {
-        const statusEl = document.getElementById('storageStatus');
-        statusEl.style.color = '#6b7280';
-        statusEl.innerText = 'Kaydediliyor...';
-        try {
-            const res = await fetch('/api/settings/storage', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ key })
-            });
-            const data = await res.json();
-            if (!res.ok || data.error) {
-                statusEl.style.color = '#ef4444';
-                statusEl.innerText = data.error || 'Değiştirilemedi.';
-                return;
-            }
-            document.querySelectorAll('.storage-item').forEach(el => el.classList.remove('active'));
-            itemEl.classList.add('active');
-            statusEl.style.color = '#10b981';
-            statusEl.innerText = 'Kaydedildi: ' + data.current;
-        } catch (err) {
-            statusEl.style.color = '#ef4444';
-            statusEl.innerText = 'Bir hata oluştu.';
-        }
-    }
-
-    function closeStorageSettings() {
-        document.getElementById('storageOverlay').classList.remove('active');
     }
 
     loadLibrary();
@@ -1397,7 +1233,7 @@ def home():
 def admin_panel():
     key = request.args.get('key')
     if key != ADMIN_SECRET_KEY:
-        abort(404) # Doğru gizli anahtar verilmezse 404 hatası verir (sayfa yokmuş gibi)
+        abort(404)
     
     total_users = len(user_stats)
     total_plays = sum(u['plays'] for u in user_stats.values())
@@ -1435,32 +1271,6 @@ def admin_unban_ip():
         user_stats[ip]['banned'] = False
         save_stats(user_stats)
     return redirect(url_for('admin_panel', key=ADMIN_SECRET_KEY))
-
-@app.route('/api/settings/storage', methods=['GET'])
-def get_storage_settings():
-    return jsonify({
-        'current': DOWNLOAD_FOLDER,
-        'options': get_storage_options()
-    })
-
-@app.route('/api/settings/storage', methods=['POST'])
-@limiter.limit("10 per minute")
-def set_storage_settings():
-    global DOWNLOAD_FOLDER
-    data = request.get_json(silent=True) or {}
-    key = data.get('key')
-    options = get_storage_options()
-    match = next((o for o in options if o['key'] == key), None)
-    if not match:
-        return jsonify({"error": "Geçersiz depolama seçimi"}), 400
-    try:
-        os.makedirs(match['path'], exist_ok=True)
-    except Exception:
-        return jsonify({"error": "Klasör oluşturulamadı. Depolama izinlerini kontrol edin."}), 500
-    DOWNLOAD_FOLDER = match['path']
-    app_config['download_folder'] = DOWNLOAD_FOLDER
-    save_config(app_config)
-    return jsonify({"success": True, "current": DOWNLOAD_FOLDER})
 
 @app.route('/api/library', methods=['GET'])
 def get_library():
@@ -1614,7 +1424,7 @@ def search_music():
         return jsonify({"error": "Arama işlemi gerçekleştirilemedi."}), 500
 
 def process_youtube_mp3(url):
-    out_template = f"{DOWNLOAD_FOLDER}/%(id)s.%(ext)s"
+    out_template = os.path.join(DOWNLOAD_FOLDER, '%(id)s.%(ext)s')
     ydl_opts = {
         'format': 'bestaudio/best',
         'outtmpl': out_template,
@@ -1628,11 +1438,11 @@ def process_youtube_mp3(url):
     }
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=True)
-        file_path = f"{DOWNLOAD_FOLDER}/{info['id']}.mp3"
+        file_path = os.path.join(DOWNLOAD_FOLDER, f"{info['id']}.mp3")
         return file_path, info.get('title', 'muzik')
 
 def process_youtube_mp4(url):
-    out_template = f"{DOWNLOAD_FOLDER}/%(id)s_video.%(ext)s"
+    out_template = os.path.join(DOWNLOAD_FOLDER, '%(id)s_video.%(ext)s')
     ydl_opts = {
         'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
         'outtmpl': out_template,
@@ -1641,7 +1451,7 @@ def process_youtube_mp4(url):
     }
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=True)
-        file_path = f"{DOWNLOAD_FOLDER}/{info['id']}_video.mp4"
+        file_path = os.path.join(DOWNLOAD_FOLDER, f"{info['id']}_video.mp4")
         return file_path, info.get('title', 'video')
 
 @app.route('/api/stream', methods=['GET'])
@@ -1692,7 +1502,7 @@ def download_video():
         return jsonify({"error": "Video indirme başarısız."}), 500
 
 @app.errorhandler(429)
-def ratelimit_handler(e):
+def ratelilmiter_handler(e):
     return jsonify({"error": "Çok fazla istek gönderdiniz. Lütfen bir süre bekleyin."}), 429
 
 if __name__ == '__main__':
@@ -1700,4 +1510,5 @@ if __name__ == '__main__':
     print(" GİZLİ ADMİN PANELİ LİNKİNİZ:")
     print(f" http://127.0.0.1:5000/admin?key={ADMIN_SECRET_KEY}")
     print("="*50 + "\n")
-    app.run(host='0.0.0.0', port=5000, debug=False)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port, debug=False)
