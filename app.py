@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, send_file, render_template_string, redirect, url_for, abort
+from flask import Flask, request, jsonify, send_file, render_template_string, redirect, url_for, session, abort
 from flask_cors import CORS
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
@@ -14,7 +14,7 @@ from datetime import datetime
 app = Flask(__name__)
 app.secret_key = os.urandom(32)
 
-# Railway / bulut ortamı için rastgele admin key
+# Termux her çalıştığında tamamen rastgele ve tahmin edilemez bir admin key üretir
 ADMIN_SECRET_KEY = secrets.token_hex(16)
 
 CORS(app)
@@ -26,15 +26,10 @@ limiter = Limiter(
     storage_uri="memory://"
 )
 
-# Railway uyumlu olarak geçici veya kalıcı /tmp dizini kullanımı
-BASE_STORAGE_DIR = '/tmp/hmusic_storage'
-DEFAULT_DOWNLOAD_FOLDER = os.path.join(BASE_STORAGE_DIR, 'MusicDownloads')
-STATS_FILE = os.path.join(BASE_STORAGE_DIR, 'stats.json')
-CONFIG_FILE = os.path.join(BASE_STORAGE_DIR, 'config.json')
-LIBRARY_FILE = os.path.join(BASE_STORAGE_DIR, 'library.json')
-
-# Gerekli klasörleri oluştur
-os.makedirs(DEFAULT_DOWNLOAD_FOLDER, exist_ok=True)
+BASE_STORAGE_DIR = os.path.expanduser('~/storage')
+DEFAULT_DOWNLOAD_FOLDER = os.path.join(BASE_STORAGE_DIR, 'shared', 'MusicDownloads')
+STATS_FILE = os.path.expanduser('~/storage/shared/MusicDownloads/stats.json')
+CONFIG_FILE = os.path.expanduser('~/.hmusic_config.json')
 
 def load_config():
     if os.path.exists(CONFIG_FILE):
@@ -59,14 +54,31 @@ if not os.path.exists(DOWNLOAD_FOLDER):
     os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
 
 def get_storage_options():
-    """Railway bulut ortamı için depolama seçenekleri."""
-    return [
-        {
-            'key': 'tmp_storage',
-            'label': 'Bulut Geçici Depolama (/tmp)',
-            'path': DEFAULT_DOWNLOAD_FOLDER
-        }
-    ]
+    """Termux ~/storage altındaki dahili depolamayı ve takılı SD kart(lar)ı listeler."""
+    options = []
+    try:
+        if os.path.isdir(BASE_STORAGE_DIR):
+            for entry in sorted(os.listdir(BASE_STORAGE_DIR)):
+                full = os.path.join(BASE_STORAGE_DIR, entry)
+                if not os.path.isdir(full):
+                    continue
+                if entry == 'shared':
+                    label = 'Dahili Depolama'
+                elif entry.startswith('external'):
+                    suffix = entry.replace('external-', '').replace('external', '').strip()
+                    label = 'SD Kart' + (f' {suffix}' if suffix else '')
+                else:
+                    continue
+                options.append({
+                    'key': entry,
+                    'label': label,
+                    'path': os.path.join(full, 'MusicDownloads')
+                })
+    except Exception:
+        pass
+    if not options:
+        options.append({'key': 'shared', 'label': 'Dahili Depolama', 'path': DEFAULT_DOWNLOAD_FOLDER})
+    return options
 
 def load_stats():
     if os.path.exists(STATS_FILE):
@@ -85,6 +97,8 @@ def save_stats(stats):
         print(f"Stats kaydetme hatasi: {e}")
 
 user_stats = load_stats()
+
+LIBRARY_FILE = os.path.expanduser('~/storage/shared/MusicDownloads/library.json')
 
 def load_library():
     if os.path.exists(LIBRARY_FILE):
@@ -114,6 +128,7 @@ def get_user_lib(ip):
     return user_library[ip]
 
 def clean_song_payload(data):
+    """Gelen şarkı verisini doğrular ve güvenli hale getirir."""
     song_id = (data.get('id') or '').strip()
     url = (data.get('url') or '').strip()
     if not song_id or not is_valid_youtube_url(url):
@@ -517,6 +532,7 @@ USER_HTML = """
         return [];
     }
 
+    // ---------- Şarkı kartı üretimi (arama / favoriler / çalma listesi ortak) ----------
     function songCardHTML(item, queueType, index) {
         const isFav = favoriteIds.has(item.id);
         return `
@@ -554,6 +570,7 @@ USER_HTML = """
         });
     }
 
+    // ---------- Arama ----------
     async function searchMusic() {
         const query = document.getElementById('searchInput').value.trim();
         if (!query) return;
@@ -577,6 +594,7 @@ USER_HTML = """
         }
     }
 
+    // ---------- Sekmeler ----------
     function switchTab(tab) {
         document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
         document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
@@ -593,7 +611,7 @@ USER_HTML = """
             favoritesData = data.favorites || [];
             favoriteIds = new Set(favoritesData.map(s => s.id));
             playlistsData = data.playlists || [];
-        } catch (err) {}
+        } catch (err) { /* sessizce geç */ }
     }
 
     async function loadFavoritesTab() {
@@ -631,6 +649,7 @@ USER_HTML = """
         });
     }
 
+    // ---------- Favoriler ----------
     async function toggleFavoriteFromCard(btn, queueType, index) {
         const item = getQueueArray(queueType)[index];
         if (!item) return;
@@ -650,9 +669,10 @@ USER_HTML = """
             if (queueType === 'favorites') {
                 renderCardList(document.getElementById('favoritesList'), favoritesData, 'favorites', 'Henüz favori şarkınız yok.');
             }
-        } catch (err) {}
+        } catch (err) { /* sessizce geç */ }
     }
 
+    // ---------- Çalma Listeleri ----------
     function openCreatePlaylistPrompt() {
         const name = prompt('Yeni çalma listesi adı:');
         if (!name || !name.trim()) return;
@@ -684,7 +704,7 @@ USER_HTML = """
             document.getElementById('playlistDetailName').innerText = data.name;
             renderCardList(document.getElementById('playlistDetailSongs'), activePlaylistSongs, 'playlist', 'Bu listede henüz şarkı yok.');
             document.getElementById('playlistDetailOverlay').classList.add('active');
-        } catch (err) {}
+        } catch (err) { /* sessizce geç */ }
     }
 
     function closePlaylistDetail() {
@@ -704,9 +724,10 @@ USER_HTML = """
             playlistsData = playlistsData.filter(p => p.id !== activePlaylistId);
             renderPlaylistGrid();
             closePlaylistDetail();
-        } catch (err) {}
+        } catch (err) { /* sessizce geç */ }
     }
 
+    // ---------- Alt sayfa (action sheet) ----------
     function openActionSheet(queueType, index) {
         const item = getQueueArray(queueType)[index];
         if (!item) return;
@@ -740,9 +761,10 @@ USER_HTML = """
             renderCardList(document.getElementById('playlistDetailSongs'), activePlaylistSongs, 'playlist', 'Bu listede henüz şarkı yok.');
             const pl = playlistsData.find(p => p.id === activePlaylistId);
             if (pl) pl.count = activePlaylistSongs.length;
-        } catch (err) {}
+        } catch (err) { /* sessizce geç */ }
     }
 
+    // ---------- Çalma listesine ekleme seçici ----------
     async function actionSheetAddToPlaylist() {
         closeActionSheet();
         await loadLibrary();
@@ -821,6 +843,7 @@ USER_HTML = """
         document.getElementById('addToPlaylistOverlay').classList.remove('active');
     }
 
+    // ---------- Çalma motoru (arama / favoriler / çalma listesi ortak kuyruk) ----------
     function playSong(btn, queueType, index) {
         const list = getQueueArray(queueType);
         const item = list[index];
@@ -891,6 +914,7 @@ USER_HTML = """
         return `${m}:${s < 10 ? '0' : ''}${s}`;
     }
 
+    // ---------- Ayarlar Paneli ----------
     function toggleSettings(e) {
         if (e) e.stopPropagation();
         document.getElementById('settingsPanel').classList.toggle('active');
@@ -903,6 +927,7 @@ USER_HTML = """
         }
     });
 
+    // ---------- Ekolayzır & 8D (Web Audio API) ----------
     let audioCtx = null;
     let sourceNode = null;
     let eqFilters = [];
@@ -953,6 +978,7 @@ USER_HTML = """
             let prevNode = sourceNode;
             eqFilters.forEach(f => { prevNode.connect(f); prevNode = f; });
 
+            // Sinema Ses (Surround): dinamik/netlik işleme + algoritmik yankı + stereo genişletme
             compressorNode = audioCtx.createDynamicsCompressor();
             compressorNode.threshold.value = -18;
             compressorNode.knee.value = 24;
@@ -995,7 +1021,9 @@ USER_HTML = """
             pannerNode = audioCtx.createStereoPanner();
             widenMerger.connect(pannerNode);
             pannerNode.connect(audioCtx.destination);
-        } catch (err) {}
+        } catch (err) {
+            console.error('Audio graph oluşturulamadı:', err);
+        }
     }
 
     function createImpulseResponse(ctx, duration, decay) {
@@ -1144,6 +1172,7 @@ USER_HTML = """
 
     function onEqToggle() {
         eqEnabled = document.getElementById('eqEnabledToggle').checked;
+        const targetGains = eqEnabled ? null : [0, 0, 0, 0, 0];
         if (!eqEnabled) {
             eqFilters.forEach(f => { f.gain.value = 0; });
         } else {
@@ -1175,6 +1204,7 @@ USER_HTML = """
         document.getElementById('eqOverlay').classList.remove('active');
     }
 
+    // ---------- İndirme Konumu ----------
     const folderIconSvg = '<svg viewBox="0 0 24 24"><path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>';
 
     async function openStorageSettings() {
@@ -1367,7 +1397,7 @@ def home():
 def admin_panel():
     key = request.args.get('key')
     if key != ADMIN_SECRET_KEY:
-        abort(404)
+        abort(404) # Doğru gizli anahtar verilmezse 404 hatası verir (sayfa yokmuş gibi)
     
     total_users = len(user_stats)
     total_plays = sum(u['plays'] for u in user_stats.values())
@@ -1426,7 +1456,7 @@ def set_storage_settings():
     try:
         os.makedirs(match['path'], exist_ok=True)
     except Exception:
-        return jsonify({"error": "Klasör oluşturulamadı."}), 500
+        return jsonify({"error": "Klasör oluşturulamadı. Depolama izinlerini kontrol edin."}), 500
     DOWNLOAD_FOLDER = match['path']
     app_config['download_folder'] = DOWNLOAD_FOLDER
     save_config(app_config)
@@ -1666,9 +1696,8 @@ def ratelimit_handler(e):
     return jsonify({"error": "Çok fazla istek gönderdiniz. Lütfen bir süre bekleyin."}), 429
 
 if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 5000))
     print("\n" + "="*50)
     print(" GİZLİ ADMİN PANELİ LİNKİNİZ:")
-    print(f" https://<proje-adiniz>.up.railway.app/admin?key={ADMIN_SECRET_KEY}")
+    print(f" http://127.0.0.1:5000/admin?key={ADMIN_SECRET_KEY}")
     print("="*50 + "\n")
-    app.run(host='0.0.0.0', port=port, debug=False)
+    app.run(host='0.0.0.0', port=5000, debug=False)
