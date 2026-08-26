@@ -1,3 +1,6 @@
 flask
 yt-dlp
 gunicorn
+flask-cors
+flask-limiter
+requests
