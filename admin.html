@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HMusic - Yönetim Paneli</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', sans-serif; }
+        body { background-color: #0b0e14; color: #f3f4f6; padding: 20px; }
+        .container { max-width: 1000px; margin: 0 auto; }
+        .admin-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 25px; }
+        .admin-header h1 { font-size: 22px; color: #10b981; }
+        .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 25px; }
+        .stat-card { background: #171c26; padding: 16px; border-radius: 12px; border: 1px solid #232a3b; }
+        .stat-card h3 { font-size: 11px; color: #9ca3af; text-transform: uppercase; margin-bottom: 4px; }
+        .stat-card p { font-size: 20px; font-weight: 700; color: #fff; }
+        .table-container { background: #171c26; border-radius: 12px; border: 1px solid #232a3b; overflow-x: auto; }
+        table { width: 100%; border-collapse: collapse; text-align: left; }
+        th, td { padding: 12px 14px; font-size: 12px; border-bottom: 1px solid #202738; }
+        th { background: #11151f; color: #9ca3af; }
+        .badge { padding: 3px 6px; border-radius: 4px; font-size: 10px; font-weight: 600; }
+        .badge-active { background: rgba(16, 185, 129, 0.2); color: #10b981; }
+        .badge-banned { background: rgba(239, 68, 68, 0.2); color: #ef4444; }
+        .btn-action { border: none; padding: 5px 10px; border-radius: 6px; font-size: 11px; font-weight: 600; cursor: pointer; }
+        .btn-ban { background: #ef4444; color: #fff; }
+        .btn-unban { background: #10b981; color: #fff; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="admin-header">
+            <h1>HMusic Yönetim Paneli</h1>
+        </div>
+        <div class="stats-grid">
+            <div class="stat-card">
+                <h3>Toplam Ziyaretçi</h3>
+                <p>{{ total_users }}</p>
+            </div>
+            <div class="stat-card">
+                <h3>Toplam Dinleme</h3>
+                <p>{{ total_plays }}</p>
+            </div>
+            <div class="stat-card">
+                <h3>İndirilen MP3</h3>
+                <p>{{ total_mp3 }}</p>
+            </div>
+            <div class="stat-card">
+                <h3>İndirilen MP4</h3>
+                <p>{{ total_mp4 }}</p>
+            </div>
+        </div>
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th>IP Adresi</th>
+                        <th>Dinleme</th>
+                        <th>MP3</th>
+                        <th>MP4</th>
+                        <th>Son Aktiflik</th>
+                        <th>Durum</th>
+                        <th>İşlem</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for ip, stats in users.items() %}
+                    <tr>
+                        <td><strong>{{ ip }}</strong></td>
+                        <td>{{ stats.plays }}</td>
+                        <td>{{ stats.mp3 }}</td>
+                        <td>{{ stats.mp4 }}</td>
+                        <td>{{ stats.last_active }}</td>
+                        <td>
+                            {% if stats.banned %}
+                            <span class="badge badge-banned">Banlı</span>
+                            {% else %}
+                            <span class="badge badge-active">Aktif</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if stats.banned %}
+                            <a href="/admin/unban?ip={{ ip }}&key={{ secret_key }}"><button class="btn-action btn-unban">Ban Kaldır</button></a>
+                            {% else %}
+                            <a href="/admin/ban?ip={{ ip }}&key={{ secret_key }}"><button class="btn-action btn-ban">Banla</button></a>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                    {% if not users %}
+                    <tr>
+                        <td colspan="7" style="text-align: center; color: #6b7280;">Henüz kullanıcı kaydı yok.</td>
+                    </tr>
+                    {% endif %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</body>
+</html>
